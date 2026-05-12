@@ -1,0 +1,24 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+venv/
+
+# Local browser/test artifacts
+.playwright-mcp/
+*.png
+
+# Business data and private credentials
+Data/
+*.xlsx
+*.csv
+*.pdf
+*.json
+!package.json
+!tsconfig.json
+
+# Local environment
+.env
+.env.*

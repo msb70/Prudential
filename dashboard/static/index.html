@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Radar de Pólizas</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="styles.css?v=20260512-mapbox-focus4" />
+  </head>
+  <body>
+    <div class="backdrop backdrop-a"></div>
+    <div class="backdrop backdrop-b"></div>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Prudential & Brokers</p>
+          <h1 id="appTitle">Radar de Pólizas</h1>
+          <p class="lede" id="appLede">
+            Vista operativa de cartera, renovaciones, ex clientes y oportunidades de ventas cruzadas.
+          </p>
+        </div>
+        <div class="meta-strip">
+          <div class="meta-pill">
+            <span>Fuente</span>
+            <strong id="sourceLabel">Cargando archivo...</strong>
+          </div>
+          <div class="meta-pill">
+            <span>Actualizado</span>
+            <strong id="generatedAt">--</strong>
+          </div>
+        </div>
+      </header>
+
+      <nav class="module-tabs" aria-label="Módulos">
+        <button class="module-tab active" data-module="portfolio">Cartera</button>
+        <button class="module-tab" data-module="scanner">Escáner PDF</button>
+      </nav>
+
+      <section class="portfolio-module" data-module-panel="portfolio">
+        <section class="kpi-band" id="kpiBand"></section>
+
+        <section class="filters-panel">
+          <div class="filters-head">
+            <div>
+              <p class="eyebrow">Filtros globales</p>
+              <h2>Segmenta la cartera sin perder el contexto</h2>
+            </div>
+            <button id="resetFilters" class="ghost-button">Reset filtros</button>
+          </div>
+
+          <div class="filter-grid">
+            <div class="filter-block">
+              <label>Oficina</label>
+              <select id="officeSelect"></select>
+            </div>
+            <div class="filter-block">
+              <label>Estado</label>
+              <select id="statusSelect"></select>
+            </div>
+            <div class="filter-block">
+              <label>Aseguradora</label>
+              <select id="insurerSelect"></select>
+            </div>
+            <div class="filter-block">
+              <label>Ramo</label>
+              <select id="typeSelect"></select>
+            </div>
+            <div class="filter-block">
+              <label>Mes y año vencimiento</label>
+              <input id="expirationMonth" type="month" />
+            </div>
+          </div>
+
+          <div class="active-filters">
+            <span>Filtros activos</span>
+            <div id="activeFilters" class="active-filter-list"></div>
+          </div>
+        </section>
+
+        <section class="portfolio-insights" id="portfolioInsights"></section>
+        <section class="chart-grid" id="portfolioCharts"></section>
+
+        <section class="workspace">
+          <div class="workspace-main">
+            <div class="actions-row" id="actionsRow"></div>
+            <section class="results-panel">
+              <div class="results-head">
+                <div>
+                  <p class="eyebrow">Detalle operativo</p>
+                  <h2 id="resultsTitle">Pólizas que vencen el próximo mes</h2>
+                </div>
+                <input id="tableSearch" type="search" placeholder="Buscar en el listado actual..." />
+              </div>
+              <div id="tableMeta" class="table-meta"></div>
+              <div id="resultsTable" class="table-shell"></div>
+            </section>
+          </div>
+
+          <aside class="chat-panel">
+            <div class="chat-head">
+              <p class="eyebrow">Chatbot local</p>
+              <h2>Consulta el reporte</h2>
+              <p>
+                Pregunta por conteos, vencimientos, oficinas, tipos de seguro, ex clientes o ventas cruzadas.
+              </p>
+            </div>
+            <div id="chatMessages" class="chat-messages"></div>
+            <div class="chat-suggestions" id="chatSuggestions"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea
+                id="chatInput"
+                rows="3"
+                placeholder="Ejemplo: cuántos autos activos hay en oficina 2"
+              ></textarea>
+              <button type="submit" class="primary-button">Preguntar</button>
+            </form>
+          </aside>
+        </section>
+      </section>
+
+      <section class="scanner-module hidden" data-module-panel="scanner">
+        <section class="scanner-grid">
+          <form id="scannerForm" class="scanner-panel scanner-control">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Escáner PDF</p>
+                <h2>Entrena la plantilla por aseguradora</h2>
+              </div>
+              <span id="scannerStatus" class="status-pill">Listo</span>
+            </div>
+            <label>URL de Google Drive</label>
+            <input id="driveUrl" type="url" placeholder="https://drive.google.com/file/d/.../view" />
+            <div class="scanner-form-row">
+              <div>
+                <label>Aseguradora</label>
+                <input id="insurerName" type="text" placeholder="Ej. Prudential, Mapfre, Allianz" />
+              </div>
+              <div>
+                <label>Plantilla guardada</label>
+                <select id="templateSelect"></select>
+              </div>
+            </div>
+            <details class="template-fields">
+              <summary>Reglas avanzadas de extracción</summary>
+              <textarea id="policyPattern" rows="2"></textarea>
+              <textarea id="holderPattern" rows="2"></textarea>
+              <textarea id="premiumPattern" rows="2"></textarea>
+              <textarea id="datePattern" rows="2"></textarea>
+            </details>
+            <div class="button-row">
+              <button type="submit" class="primary-button">Probar extracción</button>
+              <button type="button" id="saveTemplate" class="ghost-button">Guardar plantilla</button>
+              <button type="button" id="commitScan" class="ghost-button">Grabar en hoja</button>
+              <a id="openSheetLink" class="sheet-link hidden" href="#" rel="noopener">Abrir Google Sheet</a>
+            </div>
+            <div id="sheetSyncStatus" class="sync-note">Presiona “Grabar en hoja” para guardar el escaneo y abrir la hoja vinculada.</div>
+          </form>
+
+          <section class="scanner-panel scanner-results">
+            <div class="scanner-kpis" id="scannerKpis"></div>
+            <div class="results-head">
+              <div>
+                <p class="eyebrow">Resultado de prueba</p>
+                <h2>Registros extraídos</h2>
+              </div>
+              <input id="scanSearch" type="search" placeholder="Buscar póliza o tomador..." />
+            </div>
+            <div id="scanMeta" class="table-meta">Sin documento probado.</div>
+            <div id="scanError" class="scan-error hidden"></div>
+            <div id="scanTable" class="table-shell"></div>
+          </section>
+        </section>
+
+        <section class="scanner-grid scanner-grid-bottom">
+          <section class="scanner-panel">
+            <div class="results-head">
+              <div>
+                <p class="eyebrow">Texto del PDF</p>
+                <h2>Vista para ajustar plantilla</h2>
+              </div>
+            </div>
+            <pre id="textPreview" class="text-preview">No hay texto cargado.</pre>
+          </section>
+          <section class="scanner-panel">
+            <div class="results-head">
+              <div>
+                <p class="eyebrow">Control de hojas escaneadas</p>
+                <h2>Historial por ID</h2>
+              </div>
+            </div>
+            <div id="historyTable" class="table-shell"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script type="module" src="app.js?v=20260512-mapbox-focus4"></script>
+  </body>
+  </html>
