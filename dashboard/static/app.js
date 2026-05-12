@@ -59,6 +59,14 @@ const dateFormatter = new Intl.DateTimeFormat("es-ES", {
   day: "2-digit",
 });
 const API_BASE = window.location.protocol === "file:" ? "http://127.0.0.1:8765" : "";
+const staticApiRoutes = new Map([
+  ["/api/dashboard", "static-api/dashboard.json"],
+  ["/api/listings/expiring-next-month", "static-api/listings/expiring-next-month.json"],
+  ["/api/listings/former-clients", "static-api/listings/former-clients.json"],
+  ["/api/listings/cross-sell", "static-api/listings/cross-sell.json"],
+  ["/api/listings/insurers", "static-api/listings/insurers.json"],
+  ["/api/scanner/summary", "static-api/scanner/summary.json"],
+]);
 
 const kpiBand = document.getElementById("kpiBand");
 const actionsRow = document.getElementById("actionsRow");
@@ -124,14 +132,28 @@ function serializeFilters() {
 }
 
 async function fetchJSON(path) {
-  const response = await fetch(`${API_BASE}${path}`);
-  if (!response.ok) {
-    throw new Error(`Error ${response.status}`);
+  const route = path.split("?")[0];
+  const candidates = [`${API_BASE}${path}`];
+  const staticRoute = staticApiRoutes.get(route);
+  if (staticRoute) candidates.push(staticRoute);
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate);
+      if (response.ok) return response.json();
+      lastError = new Error(`Error ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
   }
-  return response.json();
+  throw lastError ?? new Error("No se pudo cargar la información.");
 }
 
 async function postJSON(path, payload) {
+  if (window.location.hostname.endsWith("github.io")) {
+    throw new Error("Esta acción requiere el servidor Python local o un backend publicado.");
+  }
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
