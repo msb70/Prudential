@@ -732,6 +732,15 @@ def _google_access_token() -> str:
     if env_token:
         return env_token
 
+    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if service_account_json:
+        return _service_account_access_token_from_json(service_account_json)
+
+    service_account_b64 = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_B64", "").strip()
+    if service_account_b64:
+        decoded = base64.b64decode(service_account_b64).decode("utf-8")
+        return _service_account_access_token_from_json(decoded)
+
     service_account_file = Path(os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", DEFAULT_SERVICE_ACCOUNT_FILE)).expanduser()
     if service_account_file.exists():
         return _service_account_access_token(service_account_file)
@@ -761,6 +770,18 @@ def _google_access_token() -> str:
 def _service_account_access_token(credentials_path: Path) -> str:
     with credentials_path.open("r", encoding="utf-8") as handle:
         credentials = json.load(handle)
+    return _service_account_access_token_from_credentials(credentials)
+
+
+def _service_account_access_token_from_json(credentials_json: str) -> str:
+    try:
+        credentials = json.loads(credentials_json)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON no contiene un JSON válido.") from error
+    return _service_account_access_token_from_credentials(credentials)
+
+
+def _service_account_access_token_from_credentials(credentials: dict[str, Any]) -> str:
     now = int(time.time())
     claim = {
         "iss": credentials["client_email"],

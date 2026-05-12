@@ -15,6 +15,6 @@ fi
 
 export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PYTHON_BIN" "$ROOT_DIR/dashboard/server.py" \
-  --host "127.0.0.1" \
+  --host "${HOST:-127.0.0.1}" \
   --port "${PORT:-8765}" \
   --excel "$ROOT_DIR/Data/listadopolizasexcel_20260420_174106.xlsx"
