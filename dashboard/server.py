@@ -7,8 +7,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 from pathlib import Path
+import sys
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dashboard.data_loader import DashboardDataset, parse_excel_date
 from dashboard.document_scanner import (
