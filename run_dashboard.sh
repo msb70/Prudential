@@ -14,7 +14,8 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-exec "$PYTHON_BIN" "$ROOT_DIR/dashboard/server.py" \
+cd "$ROOT_DIR"
+exec "$PYTHON_BIN" -m dashboard.server \
   --host "${HOST:-127.0.0.1}" \
   --port "${PORT:-8765}" \
   --excel "$ROOT_DIR/Data/listadopolizasexcel_20260420_174106.xlsx"
