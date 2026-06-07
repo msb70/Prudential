@@ -880,7 +880,8 @@ def sync_google_sheet_with_api(
 
     liquidation_values = _get_sheet_values(spreadsheet_id, "Liquidaciones!A:H", token)
     header = ["ID Hoja de Calculo", "Aseguradora", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"]
-    existing_rows = liquidation_values[1:] if liquidation_values else []
+    existing_header = liquidation_values[0] if liquidation_values else header
+    existing_rows = [_normalize_liquidation_sheet_row(existing_header, row) for row in liquidation_values[1:]] if liquidation_values else []
     filtered_rows = [row for row in existing_rows if (row[0] if row else "") != document_id]
     new_rows = [
         [
@@ -912,6 +913,38 @@ def _spreadsheet_id_from_url(raw: str) -> str:
 def _sheet_text(value: Any) -> str:
     text = str(value or "")
     return f"'{text}" if text and not text.startswith("'") else text
+
+
+def _normalize_liquidation_sheet_row(header: list[Any], row: list[Any]) -> list[Any]:
+    values = list(row) + [""] * max(0, 8 - len(row))
+    normalized_header = [normalize_for_match(str(item)) for item in header]
+
+    if len(values) >= 8 and _looks_like_policy(values[1]) and _looks_like_insurer(values[7]):
+        return [values[0], values[7], _sheet_text(values[1]), values[2], values[3], values[4], values[5], values[6]]
+
+    if "aseguradora" in normalized_header:
+        index = {name: normalized_header.index(name) for name in normalized_header}
+        return [
+            values[index.get("id hoja de calculo", 0)],
+            values[index.get("aseguradora", 1)],
+            _sheet_text(values[index.get("poliza", 2)]),
+            values[index.get("fecha", 3)],
+            values[index.get("tomador", 4)],
+            values[index.get("prima", 5)],
+            values[index.get("recibo", 6)],
+            values[index.get("pmp", 7)],
+        ]
+
+    return [values[0], values[7], _sheet_text(values[1]), values[2], values[3], values[4], values[5], values[6]]
+
+
+def _looks_like_policy(value: Any) -> bool:
+    return bool(re.fullmatch(r"'?[A-Z0-9][A-Z0-9./-]{5,24}", str(value or "").strip()))
+
+
+def _looks_like_insurer(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return any(name in text for name in ("reale", "allianz", "axa", "zurich", "mapfre", "generali", "sanitas"))
 
 
 def _google_access_token() -> str:

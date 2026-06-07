@@ -137,7 +137,7 @@ class DocumentScannerTests(unittest.TestCase):
             if sheet_range == "Liquidaciones!A:H":
                 return [
                     ["ID Hoja de Calculo", "Aseguradora", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"],
-                    ["DOC-1", "Demo", "ANTERIOR", "2026-01-01", "Cliente viejo", 1, "R-1", "No"],
+                    ["DOC-1", "ANTERIOR", "2026-01-01", "Cliente viejo", 1, "R-1", "No", "Reale"],
                     ["DOC-2", "Demo", "OTRA", "2026-01-01", "Cliente otro", 2, "R-2", "Si"],
                 ]
             return []
@@ -181,6 +181,7 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["mode"], "google-api")
         put_values = [call[2] for call in calls if call[0] == "put" and call[1] == "Liquidaciones!A1:H"][0]
         self.assertEqual(put_values[1][0], "DOC-2")
+        self.assertEqual(put_values[1][1], "Demo")
         self.assertEqual(put_values[2][2], "'NUEVA")
         self.assertNotIn("ANTERIOR", [row[2] for row in put_values])
 
