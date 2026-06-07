@@ -94,12 +94,12 @@ class DocumentScannerTests(unittest.TestCase):
 
     def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
         payload = {
-            "insurer": "Allianz Seguros",
+            "insurer": "Allianz",
             "documentId": "DOC-ALLIANZ",
             "liquidationDate": "2026-01-15",
             "rows": [
                 {
-                    "poliza": "AZ1234567",
+                    "poliza": "05704573900000",
                     "recibo": "RC987654",
                     "fechaRecibo": "2026-05-31",
                     "tomador": "Cliente Uno",
@@ -115,6 +115,8 @@ class DocumentScannerTests(unittest.TestCase):
         ):
             result = commit_scan(payload)
         self.assertEqual(result["sheetRows"][0]["Fecha"], "2026-05-31")
+        self.assertEqual(result["sheetRows"][0]["Aseguradora"], "Allianz")
+        self.assertEqual(result["sheetRows"][0]["Poliza"], "057045739")
 
     def test_mark_pmp_rows_flags_policy_presence(self) -> None:
         rows = [{"poliza": "032512697"}, {"poliza": "NO-EXISTE"}]
@@ -132,11 +134,11 @@ class DocumentScannerTests(unittest.TestCase):
         def fake_get_values(_spreadsheet_id: str, sheet_range: str, _token: str) -> list[list[object]]:
             if sheet_range == "Log!A:E":
                 return [["ID Hoja de Calculo", "Fecha", "Registros", "Total Prima", "Empresa"]]
-            if sheet_range == "Liquidaciones!A:G":
+            if sheet_range == "Liquidaciones!A:H":
                 return [
-                    ["ID Hoja de Calculo", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"],
-                    ["DOC-1", "ANTERIOR", "2026-01-01", "Cliente viejo", 1, "R-1", "No"],
-                    ["DOC-2", "OTRA", "2026-01-01", "Cliente otro", 2, "R-2", "Si"],
+                    ["ID Hoja de Calculo", "Aseguradora", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"],
+                    ["DOC-1", "Demo", "ANTERIOR", "2026-01-01", "Cliente viejo", 1, "R-1", "No"],
+                    ["DOC-2", "Demo", "OTRA", "2026-01-01", "Cliente otro", 2, "R-2", "Si"],
                 ]
             return []
 
@@ -152,6 +154,7 @@ class DocumentScannerTests(unittest.TestCase):
         sheet_rows = [
             {
                 "ID Hoja de Calculo": "DOC-1",
+                "Aseguradora": "Demo",
                 "Poliza": "NUEVA",
                 "Fecha": "2026-05-12",
                 "Tomador": "Cliente nuevo",
@@ -176,10 +179,10 @@ class DocumentScannerTests(unittest.TestCase):
             result = sync_google_sheet_with_api(sheet_rows, history_row, DEFAULT_GOOGLE_SHEET_URL)
 
         self.assertEqual(result["mode"], "google-api")
-        put_values = [call[2] for call in calls if call[0] == "put" and call[1] == "Liquidaciones!A1:G"][0]
+        put_values = [call[2] for call in calls if call[0] == "put" and call[1] == "Liquidaciones!A1:H"][0]
         self.assertEqual(put_values[1][0], "DOC-2")
-        self.assertEqual(put_values[2][1], "NUEVA")
-        self.assertNotIn("ANTERIOR", [row[1] for row in put_values])
+        self.assertEqual(put_values[2][2], "'NUEVA")
+        self.assertNotIn("ANTERIOR", [row[2] for row in put_values])
 
     def test_google_sheet_sync_reports_permission_error(self) -> None:
         with patch("dashboard.document_scanner.sync_google_sheet_with_api", side_effect=RuntimeError("Google Sheets API 403")):

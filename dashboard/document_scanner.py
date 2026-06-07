@@ -43,7 +43,7 @@ PMP_SOURCE_CSV_URL = (
 )
 DEFAULT_GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs"
 DEFAULT_SERVICE_ACCOUNT_FILE = DATA_DIR / "credentials" / "prudential-scanner-service-account.json"
-BUILT_IN_TEMPLATE_INSURERS = ("Allianz Seguros",)
+BUILT_IN_TEMPLATE_INSURERS = ("Allianz",)
 GOOGLE_SHEETS_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -110,7 +110,7 @@ def save_state(state: dict[str, Any]) -> None:
 
 
 def write_csv_exports(state: dict[str, Any]) -> None:
-    sheet_columns = ["ID Hoja de Calculo", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"]
+    sheet_columns = ["ID Hoja de Calculo", "Aseguradora", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"]
     pmp_columns = ["ID Hoja de Calculo", "Poliza", "Tomador", "PMP"]
     history_columns = [
         "ultima fecha de escaneo",
@@ -319,7 +319,7 @@ def infer_insurer(text: str, fallback: str = "") -> str:
     if "Reale Seguros Generales" in text:
         return "Reale Seguros Generales, S.A."
     if re.search(r"\ballianz\b", text, re.IGNORECASE):
-        return "Allianz Seguros"
+        return "Allianz"
     for line in text.splitlines()[:20]:
         clean = re.sub(r"\s+", " ", line).strip()
         if len(clean) >= 4 and not re.search(r"\d{2}[/-]\d{2}[/-]\d{2,4}", clean):
@@ -618,7 +618,7 @@ def _extract_allianz_vertical_rows(text: str) -> list[dict[str, Any]]:
             continue
         rows.append(
             {
-                "poliza": poliza,
+                "poliza": _normalize_allianz_policy(poliza),
                 "recibo": recibo,
                 "fechaRecibo": _allianz_due_date(vencimiento),
                 "tomador": " ".join(holder_parts).strip(),
@@ -631,12 +631,19 @@ def _extract_allianz_vertical_rows(text: str) -> list[dict[str, Any]]:
 
 def _allianz_match_to_row(match: re.Match[str]) -> dict[str, Any]:
     return {
-        "poliza": match.group("poliza").strip(),
+        "poliza": _normalize_allianz_policy(match.group("poliza")),
         "recibo": match.group("recibo").strip(),
         "fechaRecibo": _allianz_due_date(match.group("vencimiento")),
         "tomador": _clean_allianz_holder(match.group("body")),
         "primaNeta": match.group("prima"),
     }
+
+
+def _normalize_allianz_policy(raw: str) -> str:
+    policy = re.sub(r"\s+", "", raw or "").strip()
+    if policy.isdigit() and policy.endswith("00000") and len(policy) > 5:
+        return policy[:-5]
+    return policy
 
 
 def _allianz_due_date(raw: str) -> str:
@@ -770,13 +777,13 @@ def commit_scan(payload: dict[str, Any]) -> dict[str, Any]:
     sheet_rows = [
         {
             "ID Hoja de Calculo": document_id,
-            "Poliza": row.get("poliza", ""),
+            "Aseguradora": insurer,
+            "Poliza": _normalize_allianz_policy(row.get("poliza", "")) if use_row_date else row.get("poliza", ""),
             "Fecha": (row.get("fechaRecibo") if use_row_date else "") or liquidation_date,
             "Tomador": row.get("tomador", ""),
             "Prima": normalize_money(row.get("primaNeta")),
             "Recibo": row.get("recibo", ""),
             "PMP": row.get("PMP", "No"),
-            "aseguradora": insurer,
         }
         for row in rows
     ]
@@ -871,14 +878,15 @@ def sync_google_sheet_with_api(
         token,
     )
 
-    liquidation_values = _get_sheet_values(spreadsheet_id, "Liquidaciones!A:G", token)
-    header = ["ID Hoja de Calculo", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"]
+    liquidation_values = _get_sheet_values(spreadsheet_id, "Liquidaciones!A:H", token)
+    header = ["ID Hoja de Calculo", "Aseguradora", "Poliza", "Fecha", "Tomador", "Prima", "Recibo", "PMP"]
     existing_rows = liquidation_values[1:] if liquidation_values else []
     filtered_rows = [row for row in existing_rows if (row[0] if row else "") != document_id]
     new_rows = [
         [
             row.get("ID Hoja de Calculo", document_id),
-            row.get("Poliza", ""),
+            row.get("Aseguradora", row.get("aseguradora", "")),
+            _sheet_text(row.get("Poliza", "")),
             row.get("Fecha", ""),
             row.get("Tomador", ""),
             row.get("Prima", ""),
@@ -887,8 +895,8 @@ def sync_google_sheet_with_api(
         ]
         for row in sheet_rows
     ]
-    _clear_sheet_values(spreadsheet_id, "Liquidaciones!A:G", token)
-    _put_sheet_values(spreadsheet_id, "Liquidaciones!A1:G", [header, *filtered_rows, *new_rows], token)
+    _clear_sheet_values(spreadsheet_id, "Liquidaciones!A:H", token)
+    _put_sheet_values(spreadsheet_id, "Liquidaciones!A1:H", [header, *filtered_rows, *new_rows], token)
     return {
         "mode": "google-api",
         "sheetUrl": sheet_url,
@@ -899,6 +907,11 @@ def sync_google_sheet_with_api(
 def _spreadsheet_id_from_url(raw: str) -> str:
     match = re.search(r"/spreadsheets/d/([^/]+)", raw or "")
     return match.group(1) if match else raw.strip()
+
+
+def _sheet_text(value: Any) -> str:
+    text = str(value or "")
+    return f"'{text}" if text and not text.startswith("'") else text
 
 
 def _google_access_token() -> str:
