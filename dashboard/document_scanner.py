@@ -43,6 +43,7 @@ PMP_SOURCE_CSV_URL = (
 )
 DEFAULT_GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs"
 DEFAULT_SERVICE_ACCOUNT_FILE = DATA_DIR / "credentials" / "prudential-scanner-service-account.json"
+BUILT_IN_TEMPLATE_INSURERS = ("Allianz Seguros",)
 GOOGLE_SHEETS_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -71,16 +72,19 @@ def now_iso() -> str:
 def ensure_state() -> dict[str, Any]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not STATE_PATH.exists():
-        return {
+        payload = {
             "templates": {},
             "scans": {},
             "sheetRows": [],
             "historyRows": [],
             "googleSheetUrl": os.environ.get("GOOGLE_SHEET_URL", DEFAULT_GOOGLE_SHEET_URL),
         }
+        _ensure_builtin_templates(payload)
+        return payload
     with STATE_PATH.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     payload.setdefault("templates", {})
+    _ensure_builtin_templates(payload)
     payload.setdefault("scans", {})
     payload.setdefault("sheetRows", [])
     payload.setdefault("historyRows", [])
@@ -88,6 +92,12 @@ def ensure_state() -> dict[str, Any]:
     if not payload.get("googleSheetUrl") or "1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs" not in payload.get("googleSheetUrl", ""):
         payload["googleSheetUrl"] = configured_sheet_url
     return payload
+
+
+def _ensure_builtin_templates(state: dict[str, Any]) -> None:
+    templates = state.setdefault("templates", {})
+    for insurer in BUILT_IN_TEMPLATE_INSURERS:
+        templates.setdefault(insurer, build_default_template(insurer))
 
 
 def save_state(state: dict[str, Any]) -> None:
@@ -279,6 +289,13 @@ def normalize_date(raw: str | None) -> str:
     return value
 
 
+def normalize_for_match(value: str) -> str:
+    normalized = value.lower()
+    replacements = str.maketrans("áéíóúüñ", "aeiouun")
+    normalized = normalized.translate(replacements)
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+
 def month_year(value: str) -> str:
     if not value:
         return ""
@@ -294,6 +311,8 @@ def infer_insurer(text: str, fallback: str = "") -> str:
         return fallback.strip()
     if "Reale Seguros Generales" in text:
         return "Reale Seguros Generales, S.A."
+    if re.search(r"\ballianz\b", text, re.IGNORECASE):
+        return "Allianz Seguros"
     for line in text.splitlines()[:20]:
         clean = re.sub(r"\s+", " ", line).strip()
         if len(clean) >= 4 and not re.search(r"\d{2}[/-]\d{2}[/-]\d{2,4}", clean):
@@ -311,8 +330,11 @@ def build_default_template(insurer: str) -> dict[str, Any]:
 
 
 def _record_mode_for_insurer(insurer: str, fallback: str = "line") -> str:
-    if "reale" in (insurer or "").lower():
+    normalized = (insurer or "").lower()
+    if "reale" in normalized:
         return "reale-table"
+    if "allianz" in normalized:
+        return "allianz-table"
     return fallback
 
 
@@ -323,6 +345,8 @@ def extract_with_template(text: str, template: dict[str, Any]) -> dict[str, Any]
     if record_mode == "reale-table":
         liquidation_date = _extract_reale_liquidation_date(text) or liquidation_date
     rows = _extract_reale_rows(text) if record_mode == "reale-table" or "RAMO PÓLIZA RECIBO" in text else []
+    if record_mode == "allianz-table":
+        rows = _extract_allianz_rows(text)
 
     if not rows:
         rows = _extract_line_rows(text, fields)
@@ -510,6 +534,141 @@ def _reale_match_to_row(match: re.Match[str]) -> dict[str, Any]:
     }
 
 
+def _extract_allianz_rows(text: str) -> list[dict[str, Any]]:
+    table_text = _text_after_allianz_policy_header(text)
+    if not table_text:
+        return []
+    return _dedupe_rows(_extract_allianz_horizontal_rows(table_text) + _extract_allianz_vertical_rows(table_text))
+
+
+def _text_after_allianz_policy_header(text: str) -> str:
+    lines = text.splitlines()
+    for index, raw_line in enumerate(lines):
+        line = normalize_for_match(raw_line)
+        if "poliza" in line and "recibo" in line and ("vencimiento" in line or "vto" in line):
+            return "\n".join(lines[index + 1 :])
+    for index, raw_line in enumerate(lines):
+        if normalize_for_match(raw_line) == "poliza":
+            return "\n".join(lines[index + 1 :])
+    return ""
+
+
+def _extract_allianz_horizontal_rows(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{2}|-?\d+,\d{2}|-?\d+\.\d{2}"
+    vencimiento_pattern = r"(?:\d{1,2}[/-])?\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}"
+    line_pattern = re.compile(
+        rf"(?P<poliza>[A-Z0-9][A-Z0-9./-]{{5,24}})\s+"
+        rf"(?P<recibo>[A-Z0-9][A-Z0-9./-]{{4,24}})\s+"
+        rf"(?P<vencimiento>{vencimiento_pattern})\s+"
+        rf"(?P<tomador>.+?)\s+"
+        rf"(?P<prima>{money_pattern})"
+        rf"(?:\s|$)",
+        re.IGNORECASE,
+    )
+
+    pending = ""
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if _looks_like_table_total(line):
+            break
+        candidate = f"{pending} {line}".strip() if pending else line
+        match = line_pattern.search(candidate)
+        if match:
+            rows.append(_allianz_match_to_row(match))
+            pending = ""
+            continue
+        pending = candidate if re.search(r"\b[A-Z0-9][A-Z0-9./-]{5,24}\b", candidate) else ""
+    return rows
+
+
+def _extract_allianz_vertical_rows(text: str) -> list[dict[str, Any]]:
+    lines = [re.sub(r"\s+", " ", raw_line).strip() for raw_line in text.splitlines()]
+    rows: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        if _looks_like_table_total(lines[index]):
+            break
+        poliza = lines[index]
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9./-]{5,24}", poliza or ""):
+            index += 1
+            continue
+        if index + 4 >= len(lines):
+            break
+        recibo = lines[index + 1]
+        vencimiento = lines[index + 2]
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9./-]{4,24}", recibo or "") or not _allianz_due_date(vencimiento):
+            index += 1
+            continue
+        holder_parts: list[str] = []
+        cursor = index + 3
+        while cursor < len(lines) and not re.fullmatch(r"-?\d{1,3}(?:[.\s]\d{3})*,\d{2}|-?\d+,\d{2}|-?\d+\.\d{2}", lines[cursor] or ""):
+            if lines[cursor]:
+                holder_parts.append(lines[cursor])
+            cursor += 1
+        if cursor >= len(lines):
+            index += 1
+            continue
+        rows.append(
+            {
+                "poliza": poliza,
+                "recibo": recibo,
+                "fechaRecibo": _allianz_due_date(vencimiento),
+                "tomador": " ".join(holder_parts).strip(),
+                "primaNeta": lines[cursor],
+            }
+        )
+        index = cursor + 1
+    return rows
+
+
+def _allianz_match_to_row(match: re.Match[str]) -> dict[str, Any]:
+    return {
+        "poliza": match.group("poliza").strip(),
+        "recibo": match.group("recibo").strip(),
+        "fechaRecibo": _allianz_due_date(match.group("vencimiento")),
+        "tomador": _clean_allianz_holder(match.group("tomador")),
+        "primaNeta": match.group("prima"),
+    }
+
+
+def _allianz_due_date(raw: str) -> str:
+    value = re.sub(r"\s+", "", raw or "")
+    patterns = [
+        ("%m/%Y", r"^\d{1,2}/\d{4}$"),
+        ("%m-%Y", r"^\d{1,2}-\d{4}$"),
+        ("%m/%y", r"^\d{1,2}/\d{2}$"),
+        ("%m-%y", r"^\d{1,2}-\d{2}$"),
+        ("%d/%m/%Y", r"^\d{1,2}/\d{1,2}/\d{4}$"),
+        ("%d-%m-%Y", r"^\d{1,2}-\d{1,2}-\d{4}$"),
+        ("%Y/%m", r"^\d{4}/\d{1,2}$"),
+        ("%Y-%m", r"^\d{4}-\d{1,2}$"),
+    ]
+    for fmt, pattern in patterns:
+        if not re.fullmatch(pattern, value):
+            continue
+        try:
+            parsed = datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        year = parsed.year
+        month = parsed.month
+        return f"{year:04d}-{month:02d}-{monthrange(year, month)[1]:02d}"
+    return ""
+
+
+def _clean_allianz_holder(raw: str) -> str:
+    clean = re.sub(r"\s+", " ", raw or "").strip()
+    clean = re.sub(r"\b(?:EUR|€|T\.?\s*RECIBO|TOTAL)\b.*$", "", clean, flags=re.IGNORECASE).strip()
+    return clean[:120]
+
+
+def _looks_like_table_total(line: str) -> bool:
+    return bool(re.search(r"\b(total|subtotal|suma)\b", line or "", re.IGNORECASE))
+
+
 def _extract_cluster_rows(text: str, fields: dict[str, str]) -> list[dict[str, Any]]:
     policies = re.findall(fields.get("policy", DEFAULT_FIELD_PATTERNS["policy"]), text, re.IGNORECASE)
     holders = re.findall(fields.get("holder", DEFAULT_FIELD_PATTERNS["holder"]), text, re.IGNORECASE)
@@ -593,11 +752,12 @@ def commit_scan(payload: dict[str, Any]) -> dict[str, Any]:
     document_id = payload.get("documentId", "")
     scanned_at = now_iso()
 
+    use_row_date = "allianz" in insurer.lower()
     sheet_rows = [
         {
             "ID Hoja de Calculo": document_id,
             "Poliza": row.get("poliza", ""),
-            "Fecha": liquidation_date,
+            "Fecha": (row.get("fechaRecibo") if use_row_date else "") or liquidation_date,
             "Tomador": row.get("tomador", ""),
             "Prima": normalize_money(row.get("primaNeta")),
             "Recibo": row.get("recibo", ""),

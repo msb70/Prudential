@@ -6,6 +6,7 @@ from unittest.mock import patch
 from dashboard.document_scanner import (
     DEFAULT_GOOGLE_SHEET_URL,
     PMP_SOURCE_CSV_URL,
+    commit_scan,
     extract_with_template,
     mark_pmp_rows,
     normalize_money,
@@ -72,6 +73,48 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["liquidationDate"], "2025-04-30")
         self.assertEqual(result["totals"]["policies"], 2)
         self.assertEqual(result["totals"]["netPremium"], 794.51)
+
+    def test_allianz_table_starts_after_policy_header_and_uses_due_month_end(self) -> None:
+        text = """
+        Allianz resumen previo
+        9999999999 8888888888 01/2026 NO DEBE SALIR 999,99
+        Póliza Recibo Vencimiento Tomador T.Recibo
+        AZ1234567 RC987654 05/2026 CLIENTE UNO SL 123,45
+        BZ7654321 RC123456 02/26 MARIA GARCIA 1.234,56
+        Total 1.358,01
+        """
+        result = extract_with_template(text, {"recordMode": "allianz-table", "fields": {}})
+        self.assertEqual(result["totals"]["policies"], 2)
+        self.assertEqual(result["totals"]["netPremium"], 1358.01)
+        self.assertEqual(result["rows"][0]["poliza"], "AZ1234567")
+        self.assertEqual(result["rows"][0]["recibo"], "RC987654")
+        self.assertEqual(result["rows"][0]["fechaRecibo"], "2026-05-31")
+        self.assertEqual(result["rows"][1]["fechaRecibo"], "2026-02-28")
+        self.assertEqual(result["rows"][0]["tomador"], "CLIENTE UNO SL")
+
+    def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
+        payload = {
+            "insurer": "Allianz Seguros",
+            "documentId": "DOC-ALLIANZ",
+            "liquidationDate": "2026-01-15",
+            "rows": [
+                {
+                    "poliza": "AZ1234567",
+                    "recibo": "RC987654",
+                    "fechaRecibo": "2026-05-31",
+                    "tomador": "Cliente Uno",
+                    "primaNeta": "123,45",
+                }
+            ],
+        }
+        with (
+            patch("dashboard.document_scanner.ensure_state", return_value={"templates": {}, "scans": {}, "sheetRows": [], "historyRows": [], "googleSheetUrl": DEFAULT_GOOGLE_SHEET_URL}),
+            patch("dashboard.document_scanner.save_state"),
+            patch("dashboard.document_scanner.sync_google_sheet", return_value={"mode": "test"}),
+            patch("dashboard.document_scanner.mark_pmp_rows", side_effect=lambda rows: rows),
+        ):
+            result = commit_scan(payload)
+        self.assertEqual(result["sheetRows"][0]["Fecha"], "2026-05-31")
 
     def test_mark_pmp_rows_flags_policy_presence(self) -> None:
         rows = [{"poliza": "032512697"}, {"poliza": "NO-EXISTE"}]
