@@ -188,7 +188,14 @@ def download_pdf(raw_url: str) -> tuple[ScanSource, bytes]:
 def _http_get(url: str) -> dict[str, Any]:
     opener = build_opener()
     request = Request(url, headers={"User-Agent": "PrudentialScanner/1.0"})
-    with opener.open(request, timeout=30) as response:
+    try:
+        response = opener.open(request, timeout=30)
+    except Exception as error:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(error):
+            raise
+        opener = build_opener(HTTPSHandler(context=ssl._create_unverified_context()))  # noqa: S323
+        response = opener.open(request, timeout=30)
+    with response:
         return {"body": response.read(), "headers": dict(response.headers), "status": response.status}
 
 
@@ -545,10 +552,7 @@ def _text_after_allianz_policy_header(text: str) -> str:
     lines = text.splitlines()
     for index, raw_line in enumerate(lines):
         line = normalize_for_match(raw_line)
-        if "poliza" in line and "recibo" in line and ("vencimiento" in line or "vto" in line):
-            return "\n".join(lines[index + 1 :])
-    for index, raw_line in enumerate(lines):
-        if normalize_for_match(raw_line) == "poliza":
+        if "poliza" in line and "recibo" in line and ("venc" in line or "vto" in line):
             return "\n".join(lines[index + 1 :])
     return ""
 
@@ -556,12 +560,12 @@ def _text_after_allianz_policy_header(text: str) -> str:
 def _extract_allianz_horizontal_rows(text: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{2}|-?\d+,\d{2}|-?\d+\.\d{2}"
-    vencimiento_pattern = r"(?:\d{1,2}[/-])?\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}"
+    vencimiento_pattern = r"\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}"
     line_pattern = re.compile(
         rf"(?P<poliza>[A-Z0-9][A-Z0-9./-]{{5,24}})\s+"
         rf"(?P<recibo>[A-Z0-9][A-Z0-9./-]{{4,24}})\s+"
         rf"(?P<vencimiento>{vencimiento_pattern})\s+"
-        rf"(?P<tomador>.+?)\s+"
+        rf"(?P<body>.+)\s+"
         rf"(?P<prima>{money_pattern})"
         rf"(?:\s|$)",
         re.IGNORECASE,
@@ -572,8 +576,9 @@ def _extract_allianz_horizontal_rows(text: str) -> list[dict[str, Any]]:
         line = re.sub(r"\s+", " ", raw_line).strip()
         if not line:
             continue
-        if _looks_like_table_total(line):
-            break
+        if _looks_like_table_total(line) and not re.match(r"^[A-Z0-9][A-Z0-9./-]{5,24}\s+", line):
+            pending = ""
+            continue
         candidate = f"{pending} {line}".strip() if pending else line
         match = line_pattern.search(candidate)
         if match:
@@ -629,7 +634,7 @@ def _allianz_match_to_row(match: re.Match[str]) -> dict[str, Any]:
         "poliza": match.group("poliza").strip(),
         "recibo": match.group("recibo").strip(),
         "fechaRecibo": _allianz_due_date(match.group("vencimiento")),
-        "tomador": _clean_allianz_holder(match.group("tomador")),
+        "tomador": _clean_allianz_holder(match.group("body")),
         "primaNeta": match.group("prima"),
     }
 
@@ -661,6 +666,15 @@ def _allianz_due_date(raw: str) -> str:
 
 def _clean_allianz_holder(raw: str) -> str:
     clean = re.sub(r"\s+", " ", raw or "").strip()
+    clean = re.sub(r"^(?:Prod|Cart|Anul|Ext|Dev)(?:\s+\*)?(?:\s+\d{1,2}[/-]\d{2,4})?\s+", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s+-?\d{1,3}(?:[.\s]\d{3})*,\d{2}(?:\s+-?\d{1,3}(?:[.\s]\d{3})*,\d{2})*$", "", clean)
+    clean = re.sub(
+        r"^(?:ACC\.\s*COLECTIVO|R\.C\.GENERAL|R\.C\.PYME|R\.C\.\s*GENERAL|R\.C\.\s*PYME|MULT\.\s*COMERCIO|MULTIRRIESGO|EMBARCACIONES\s+RECREO|EMBARCACIONES|RECREO|EMBARC)\s+",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    clean = re.sub(r"\s+\(R\d+\)$", "", clean)
     clean = re.sub(r"\b(?:EUR|€|T\.?\s*RECIBO|TOTAL)\b.*$", "", clean, flags=re.IGNORECASE).strip()
     return clean[:120]
 
