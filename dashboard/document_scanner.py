@@ -730,6 +730,11 @@ def scan_document(payload: dict[str, Any]) -> dict[str, Any]:
     state = ensure_state()
     source, pdf_bytes = download_pdf(payload["driveUrl"])
     text, page_count = extract_pdf_text(pdf_bytes)
+    if page_count and not text.strip():
+        raise ValueError(
+            "El PDF no contiene texto extraíble. Parece un documento escaneado como imagen; "
+            "hay que aplicarle OCR antes de poder leer pólizas."
+        )
     insurer = infer_insurer(text, payload.get("insurer", ""))
     template = (payload.get("template") or state["templates"].get(insurer) or build_default_template(insurer)).copy()
     template["recordMode"] = _record_mode_for_insurer(insurer, template.get("recordMode", "line"))

@@ -60,6 +60,14 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["totals"]["policies"], 159)
         self.assertEqual(result["totals"]["netPremium"], 33343.71)
 
+    def test_scan_document_reports_scanned_pdf_without_text(self) -> None:
+        with (
+            patch("dashboard.document_scanner.download_pdf", return_value=(parse_google_drive_source("https://drive.google.com/file/d/DOC/view"), b"%PDF")),
+            patch("dashboard.document_scanner.extract_pdf_text", return_value=("", 4)),
+        ):
+            with self.assertRaisesRegex(ValueError, "OCR"):
+                scan_document({"driveUrl": "https://drive.google.com/file/d/DOC/view"})
+
     def test_reale_table_accepts_slash_dates_and_invoice_date(self) -> None:
         text = """
         DETALLE LIQUIDACIÓN DE COMISIONES
