@@ -713,14 +713,22 @@ function clearScanError() {
 
 function renderScanError(message, url = driveUrl.value) {
   const documentId = driveDocumentIdFromUrl(url);
+  const lowerMessage = String(message || "").toLowerCase();
+  const isOcrError = lowerMessage.includes("ocr") || lowerMessage.includes("no contiene texto") || lowerMessage.includes("escaneado como imagen");
+  const probableCause = isOcrError
+    ? "El archivo sí se descargó, pero sus páginas son imágenes escaneadas y no traen texto seleccionable."
+    : "Google Drive no entregó una descarga PDF directa al servidor.";
+  const nextStep = isOcrError
+    ? "Sube una versión PDF con texto seleccionable o procesa el documento con OCR antes de escanearlo."
+    : "Comparte el archivo con permiso de lectura mediante enlace o descarga el PDF y cachea el archivo para ese ID.";
   scanError.classList.remove("hidden");
   scanError.innerHTML = `
     <div class="scan-error-title">No se pudo escanear este PDF</div>
     <div class="scan-error-message">${message}</div>
     <dl class="scan-error-details">
       <div><dt>ID detectado</dt><dd>${documentId}</dd></div>
-      <div><dt>Causa probable</dt><dd>Google Drive no entregó una descarga PDF directa al servidor local.</dd></div>
-      <div><dt>Qué hacer</dt><dd>Comparte el archivo con permiso de lectura mediante enlace o descarga el PDF y cachea el archivo para ese ID.</dd></div>
+      <div><dt>Causa probable</dt><dd>${probableCause}</dd></div>
+      <div><dt>Qué hacer</dt><dd>${nextStep}</dd></div>
     </dl>
   `;
 }
