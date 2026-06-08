@@ -118,6 +118,23 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["sheetRows"][0]["Aseguradora"], "Allianz")
         self.assertEqual(result["sheetRows"][0]["Poliza"], "057045739")
 
+    def test_commit_scan_validates_allianz_pmp_after_policy_normalization(self) -> None:
+        payload = {
+            "insurer": "Allianz",
+            "documentId": "DOC-ALLIANZ",
+            "liquidationDate": "",
+            "rows": [{"poliza": "05704573900000", "primaNeta": "1,00"}],
+        }
+        with (
+            patch("dashboard.document_scanner.ensure_state", return_value={"templates": {}, "scans": {}, "sheetRows": [], "historyRows": [], "googleSheetUrl": DEFAULT_GOOGLE_SHEET_URL}),
+            patch("dashboard.document_scanner.save_state"),
+            patch("dashboard.document_scanner.sync_google_sheet", return_value={"mode": "test"}),
+            patch("dashboard.document_scanner.load_pmp_policy_index", return_value={"057045739"}),
+        ):
+            result = commit_scan(payload)
+        self.assertEqual(result["sheetRows"][0]["Poliza"], "057045739")
+        self.assertEqual(result["sheetRows"][0]["PMP"], "Si")
+
     def test_mark_pmp_rows_flags_policy_presence(self) -> None:
         rows = [{"poliza": "032512697"}, {"poliza": "NO-EXISTE"}]
         marked = mark_pmp_rows(rows, {"032512697"})
@@ -148,7 +165,7 @@ class DocumentScannerTests(unittest.TestCase):
         def fake_clear(_spreadsheet_id: str, sheet_range: str, _token: str) -> None:
             calls.append(("clear", sheet_range, None))
 
-        def fake_put(_spreadsheet_id: str, sheet_range: str, values: list[list[object]], _token: str) -> None:
+        def fake_put(_spreadsheet_id: str, sheet_range: str, values: list[list[object]], _token: str, **_kwargs: object) -> None:
             calls.append(("put", sheet_range, values))
 
         sheet_rows = [
@@ -182,7 +199,7 @@ class DocumentScannerTests(unittest.TestCase):
         put_values = [call[2] for call in calls if call[0] == "put" and call[1] == "Liquidaciones!A1:H"][0]
         self.assertEqual(put_values[1][0], "DOC-2")
         self.assertEqual(put_values[1][1], "Demo")
-        self.assertEqual(put_values[2][2], "'NUEVA")
+        self.assertEqual(put_values[2][2], "NUEVA")
         self.assertNotIn("ANTERIOR", [row[2] for row in put_values])
 
     def test_google_sheet_sync_reports_permission_error(self) -> None:

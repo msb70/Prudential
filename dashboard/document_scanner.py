@@ -769,16 +769,17 @@ def commit_scan(payload: dict[str, Any]) -> dict[str, Any]:
     state = ensure_state()
     insurer = payload.get("insurer", "").strip() or "Aseguradora sin identificar"
     liquidation_date = payload.get("liquidationDate", "")
-    rows = mark_pmp_rows(payload.get("rows", []))
     document_id = payload.get("documentId", "")
     scanned_at = now_iso()
 
     use_row_date = "allianz" in insurer.lower()
+    rows = _normalize_rows_before_pmp(payload.get("rows", []), use_row_date)
+    rows = mark_pmp_rows(rows)
     sheet_rows = [
         {
             "ID Hoja de Calculo": document_id,
             "Aseguradora": insurer,
-            "Poliza": _normalize_allianz_policy(row.get("poliza", "")) if use_row_date else row.get("poliza", ""),
+            "Poliza": row.get("poliza", ""),
             "Fecha": (row.get("fechaRecibo") if use_row_date else "") or liquidation_date,
             "Tomador": row.get("tomador", ""),
             "Prima": normalize_money(row.get("primaNeta")),
@@ -897,7 +898,7 @@ def sync_google_sheet_with_api(
         for row in sheet_rows
     ]
     _clear_sheet_values(spreadsheet_id, "Liquidaciones!A:H", token)
-    _put_sheet_values(spreadsheet_id, "Liquidaciones!A1:H", [header, *filtered_rows, *new_rows], token)
+    _put_sheet_values(spreadsheet_id, "Liquidaciones!A1:H", [header, *filtered_rows, *new_rows], token, value_input_option="RAW")
     return {
         "mode": "google-api",
         "sheetUrl": sheet_url,
@@ -911,8 +912,17 @@ def _spreadsheet_id_from_url(raw: str) -> str:
 
 
 def _sheet_text(value: Any) -> str:
-    text = str(value or "")
-    return f"'{text}" if text and not text.startswith("'") else text
+    return str(value or "").lstrip("'")
+
+
+def _normalize_rows_before_pmp(rows: list[dict[str, Any]], is_allianz: bool) -> list[dict[str, Any]]:
+    normalized_rows: list[dict[str, Any]] = []
+    for row in rows:
+        next_row = dict(row)
+        if is_allianz:
+            next_row["poliza"] = _normalize_allianz_policy(next_row.get("poliza", ""))
+        normalized_rows.append(next_row)
+    return normalized_rows
 
 
 def _normalize_liquidation_sheet_row(header: list[Any], row: list[Any]) -> list[Any]:
@@ -1120,10 +1130,16 @@ def _get_sheet_values(spreadsheet_id: str, sheet_range: str, token: str) -> list
     return payload.get("values", [])
 
 
-def _put_sheet_values(spreadsheet_id: str, sheet_range: str, values: list[list[Any]], token: str) -> None:
+def _put_sheet_values(
+    spreadsheet_id: str,
+    sheet_range: str,
+    values: list[list[Any]],
+    token: str,
+    value_input_option: str = "USER_ENTERED",
+) -> None:
     _google_sheets_request(
         "PUT",
-        _sheet_values_url(spreadsheet_id, sheet_range, "?valueInputOption=USER_ENTERED"),
+        _sheet_values_url(spreadsheet_id, sheet_range, f"?valueInputOption={quote(value_input_option)}"),
         token,
         {"range": sheet_range, "majorDimension": "ROWS", "values": values},
     )
