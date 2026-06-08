@@ -100,6 +100,17 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["rows"][1]["fechaRecibo"], "2026-02-28")
         self.assertEqual(result["rows"][0]["tomador"], "CLIENTE UNO SL")
 
+    def test_allianz_table_removes_ramo_before_holder(self) -> None:
+        text = """
+        Allianz Seguros
+        Póliza Recibo Venc. Emi.F.Cobr. Ramo Tomador P.Neta T.Recibo
+        05722233300000 859156238 05-2025 Prod 05-2025 Allianz Moto V.03 Davis, Anthony 100,00 10,00 110,00
+        """
+        result = extract_with_template(text, {"recordMode": "allianz-table", "fields": {}})
+        self.assertEqual(result["rows"][0]["poliza"], "057222333")
+        self.assertEqual(result["rows"][0]["tomador"], "Davis, Anthony")
+        self.assertEqual(result["rows"][0]["primaNeta"], 110.0)
+
     def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
         payload = {
             "insurer": "Allianz",

@@ -43,7 +43,7 @@ PMP_SOURCE_CSV_URL = (
 )
 DEFAULT_GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs"
 DEFAULT_SERVICE_ACCOUNT_FILE = DATA_DIR / "credentials" / "prudential-scanner-service-account.json"
-BUILT_IN_TEMPLATE_INSURERS = ("Allianz",)
+BUILT_IN_TEMPLATE_INSURERS = ("Reale Seguros Generales, S.A.", "Allianz")
 GOOGLE_SHEETS_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -675,6 +675,7 @@ def _clean_allianz_holder(raw: str) -> str:
     clean = re.sub(r"\s+", " ", raw or "").strip()
     clean = re.sub(r"^(?:Prod|Cart|Anul|Ext|Dev)(?:\s+\*)?(?:\s+\d{1,2}[/-]\d{2,4})?\s+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s+-?\d{1,3}(?:[.\s]\d{3})*,\d{2}(?:\s+-?\d{1,3}(?:[.\s]\d{3})*,\d{2})*$", "", clean)
+    clean = re.sub(r"^Allianz\s+.+?\bV\.\d{1,3}\s+", "", clean, flags=re.IGNORECASE)
     clean = re.sub(
         r"^(?:ACC\.\s*COLECTIVO|R\.C\.GENERAL|R\.C\.PYME|R\.C\.\s*GENERAL|R\.C\.\s*PYME|MULT\.\s*COMERCIO|MULTIRRIESGO|EMBARCACIONES\s+RECREO|EMBARCACIONES|RECREO|EMBARC)\s+",
         "",
