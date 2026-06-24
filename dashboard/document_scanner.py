@@ -43,7 +43,7 @@ PMP_SOURCE_CSV_URL = (
 )
 DEFAULT_GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs"
 DEFAULT_SERVICE_ACCOUNT_FILE = DATA_DIR / "credentials" / "prudential-scanner-service-account.json"
-BUILT_IN_TEMPLATE_INSURERS = ("Reale Seguros Generales, S.A.", "Allianz")
+BUILT_IN_TEMPLATE_INSURERS = ("Reale Seguros Generales, S.A.", "Allianz", "Zurich")
 GOOGLE_SHEETS_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -320,6 +320,8 @@ def infer_insurer(text: str, fallback: str = "") -> str:
         return "Reale Seguros Generales, S.A."
     if re.search(r"\ballianz\b", text, re.IGNORECASE):
         return "Allianz"
+    if re.search(r"\bzurich\b", text, re.IGNORECASE):
+        return "Zurich"
     for line in text.splitlines()[:20]:
         clean = re.sub(r"\s+", " ", line).strip()
         if len(clean) >= 4 and not re.search(r"\d{2}[/-]\d{2}[/-]\d{2,4}", clean):
@@ -342,6 +344,8 @@ def _record_mode_for_insurer(insurer: str, fallback: str = "line") -> str:
         return "reale-table"
     if "allianz" in normalized:
         return "allianz-table"
+    if "zurich" in normalized:
+        return "zurich-table"
     return fallback
 
 
@@ -354,6 +358,8 @@ def extract_with_template(text: str, template: dict[str, Any]) -> dict[str, Any]
     rows = _extract_reale_rows(text) if record_mode == "reale-table" or "RAMO PÓLIZA RECIBO" in text else []
     if record_mode == "allianz-table":
         rows = _extract_allianz_rows(text)
+    if record_mode == "zurich-table":
+        rows = _extract_zurich_rows(text)
 
     if not rows:
         rows = _extract_line_rows(text, fields)
@@ -691,6 +697,57 @@ def _looks_like_table_total(line: str) -> bool:
     return bool(re.search(r"\b(total|subtotal|suma)\b", line or "", re.IGNORECASE))
 
 
+def _extract_zurich_rows(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{1,2}|-?\d+,\d{1,2}|-?\d+"
+    line_pattern = re.compile(
+        rf"^(?P<poliza>\d{{7,12}})\s+"
+        rf"(?P<recibo>\d{{7,12}})\s+"
+        rf"(?P<body>.+?)\s+"
+        rf"(?P<importe>{money_pattern})\s+"
+        rf"(?P<prima>{money_pattern})\s+"
+        rf"(?P<comision>{money_pattern})\s+"
+        rf"(?P<vencimiento>\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{4}})\s+"
+        rf"(?P<fecha_recibo>\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{4}})"
+        rf"(?:\s|$)",
+        re.IGNORECASE,
+    )
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or not re.match(r"^\d{7,12}\s+\d{7,12}\s+", line):
+            continue
+        match = line_pattern.match(line)
+        if not match:
+            continue
+        rows.append(
+            {
+                "poliza": match.group("poliza"),
+                "recibo": match.group("recibo"),
+                "tomador": _clean_zurich_holder(match.group("body")),
+                "fechaRecibo": normalize_date(match.group("vencimiento")),
+                "primaNeta": match.group("prima"),
+            }
+        )
+
+    return _dedupe_rows_by(rows, ("poliza", "recibo"))
+
+
+def _clean_zurich_holder(raw: str) -> str:
+    clean = re.sub(r"\s+", " ", raw or "").strip()
+    product_prefixes = [
+        r"ZURICH\s+-\s+HOGAR",
+        r"ZURICH\s+MOTOR\s+PACK",
+        r"MOTOR\s+COMPACTO",
+        r"MOTOR\s+GO\]?",
+        r"HOGAR\s+GO\]?",
+        r"RESPONSABILIDAD\s+CIVIL\s+GENERAL",
+    ]
+    clean = re.sub(rf"^(?:{'|'.join(product_prefixes)})\s+", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean[:120]
+
+
 def _extract_cluster_rows(text: str, fields: dict[str, str]) -> list[dict[str, Any]]:
     policies = re.findall(fields.get("policy", DEFAULT_FIELD_PATTERNS["policy"]), text, re.IGNORECASE)
     holders = re.findall(fields.get("holder", DEFAULT_FIELD_PATTERNS["holder"]), text, re.IGNORECASE)
@@ -716,10 +773,14 @@ def _infer_holder_from_line(line: str, policy: str, premium: str) -> str:
 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _dedupe_rows_by(rows, ("poliza",))
+
+
+def _dedupe_rows_by(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     deduped = []
     for row in rows:
-        key = str(row.get("poliza", "")).strip().upper()
+        key = "|".join(str(row.get(field, "")).strip().upper() for field in keys)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -778,7 +839,8 @@ def commit_scan(payload: dict[str, Any]) -> dict[str, Any]:
     document_id = payload.get("documentId", "")
     scanned_at = now_iso()
 
-    use_row_date = "allianz" in insurer.lower()
+    normalized_insurer = insurer.lower()
+    use_row_date = "allianz" in normalized_insurer or "zurich" in normalized_insurer
     rows = _normalize_rows_before_pmp(payload.get("rows", []), use_row_date)
     rows = mark_pmp_rows(rows)
     sheet_rows = [

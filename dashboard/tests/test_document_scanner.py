@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from dashboard.document_scanner import (
     DEFAULT_GOOGLE_SHEET_URL,
     PMP_SOURCE_CSV_URL,
     commit_scan,
+    extract_pdf_text,
     extract_with_template,
     mark_pmp_rows,
     normalize_money,
@@ -111,6 +113,34 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["tomador"], "Davis, Anthony")
         self.assertEqual(result["rows"][0]["primaNeta"], 110.0)
 
+    def test_zurich_table_keeps_same_policy_with_different_receipts(self) -> None:
+        text = """
+        Poliza Recibo Producto Tomador IMPORTE TOTAL PRIMA NETA COMISION Fecha Vencimiento Fecha Recibo
+        124870858 8871189711 MOTOR GO] TIDSWELL , JONATHAN 341,93 313,79 31,39 9/06/2026 10/06/2025
+        124870858 6171140770 MOTOR GO] TIDSWELL , JONATHAN 331,99 304,65 30,48 9/06/2026 10/06/2025
+        116706045 9044910891 RESPONSABILIDAD CIVIL GENERAL SANCHEZ GUERRA, ADOLFO 235,57 213,83 42,77 4/06/2026 5/12/2025
+        """
+        result = extract_with_template(text, {"recordMode": "zurich-table", "fields": {}})
+        self.assertEqual(result["totals"]["policies"], 3)
+        self.assertEqual(result["totals"]["netPremium"], 832.27)
+        self.assertEqual(result["rows"][0]["fechaRecibo"], "2026-06-09")
+        self.assertEqual(result["rows"][0]["recibo"], "8871189711")
+        self.assertEqual(result["rows"][0]["tomador"], "TIDSWELL , JONATHAN")
+        self.assertEqual(result["rows"][2]["tomador"], "SANCHEZ GUERRA, ADOLFO")
+
+    def test_zurich_local_pdf_extracts_all_rows_when_available(self) -> None:
+        pdf_path = Path("/Users/miguelspina/Downloads/Zurich 2025")
+        if not pdf_path.exists():
+            self.skipTest("Zurich 2025 local PDF not available")
+        text, page_count = extract_pdf_text(pdf_path.read_bytes())
+        result = extract_with_template(text, {"recordMode": "zurich-table", "fields": {}})
+        self.assertEqual(page_count, 11)
+        self.assertEqual(result["totals"]["policies"], 454)
+        self.assertEqual(result["rows"][0]["poliza"], "95095808")
+        self.assertEqual(result["rows"][0]["recibo"], "9003188541")
+        self.assertEqual(result["rows"][0]["fechaRecibo"], "2026-11-09")
+        self.assertEqual(result["rows"][0]["primaNeta"], 239.59)
+
     def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
         payload = {
             "insurer": "Allianz",
@@ -136,6 +166,32 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["sheetRows"][0]["Fecha"], "2026-05-31")
         self.assertEqual(result["sheetRows"][0]["Aseguradora"], "Allianz")
         self.assertEqual(result["sheetRows"][0]["Poliza"], "057045739")
+
+    def test_commit_scan_uses_zurich_row_due_date(self) -> None:
+        payload = {
+            "insurer": "Zurich",
+            "documentId": "DOC-ZURICH",
+            "liquidationDate": "",
+            "rows": [
+                {
+                    "poliza": "124870858",
+                    "recibo": "8871189711",
+                    "fechaRecibo": "2026-06-09",
+                    "tomador": "TIDSWELL , JONATHAN",
+                    "primaNeta": "313,79",
+                }
+            ],
+        }
+        with (
+            patch("dashboard.document_scanner.ensure_state", return_value={"templates": {}, "scans": {}, "sheetRows": [], "historyRows": [], "googleSheetUrl": DEFAULT_GOOGLE_SHEET_URL}),
+            patch("dashboard.document_scanner.save_state"),
+            patch("dashboard.document_scanner.sync_google_sheet", return_value={"mode": "test"}),
+            patch("dashboard.document_scanner.mark_pmp_rows", side_effect=lambda rows: rows),
+        ):
+            result = commit_scan(payload)
+        self.assertEqual(result["sheetRows"][0]["Fecha"], "2026-06-09")
+        self.assertEqual(result["sheetRows"][0]["Aseguradora"], "Zurich")
+        self.assertEqual(result["sheetRows"][0]["Recibo"], "8871189711")
 
     def test_commit_scan_validates_allianz_pmp_after_policy_normalization(self) -> None:
         payload = {
