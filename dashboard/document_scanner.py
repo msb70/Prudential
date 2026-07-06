@@ -759,29 +759,32 @@ def _clean_zurich_holder(raw: str) -> str:
 def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{1,2}|-?\d+,\d{1,2}"
-    line_pattern = re.compile(
+    prefix_pattern = re.compile(
         rf"^(?P<poliza>\d{{13}})\s+"
-        rf"(?P<opol>\d{{1,6}})\s+"
-        rf"(?:(?P<origen>\d{{1,6}})\s+)?"
+        rf"(?:(?P<opol>\d{{1,6}})(?:\s+(?P<origen>\d{{1,6}}))?\s+)?"
         rf"(?P<periodo>\d{{2}}[/-]\d{{4}})\s+"
         rf"(?P<periodicidad>[A-Z])\s+"
         rf"(?P<cc>\d+)\s+"
         rf"(?P<tc>[A-Z])\s+"
-        rf"(?P<tomador>.+?)\s+"
-        rf"(?P<prima>{money_pattern})\s+"
-        rf"(?P<prima_total>{money_pattern})\s+"
-        rf"(?P<liquido>{money_pattern})\s+"
-        rf"(?P<comision>{money_pattern})"
-        rf"(?:\s|$)",
+        rf"(?P<body>.+)$",
         re.IGNORECASE,
     )
 
     for raw_line in text.splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
-        if not line or not re.match(r"^\d{13}\s+\d+", line):
+        if not line or not re.match(r"^\d{13}\s+", line):
             continue
-        match = line_pattern.match(line)
+        match = prefix_pattern.match(line)
         if not match:
+            continue
+        body = match.group("body").strip()
+        body_without_status = re.sub(r"\s+\d{2}$", "", body)
+        money_matches = list(re.finditer(money_pattern, body_without_status))
+        if len(money_matches) < 3:
+            continue
+        first_money = money_matches[-4] if len(money_matches) >= 4 else money_matches[-3]
+        tomador = body_without_status[: first_money.start()].strip()
+        if not tomador:
             continue
         recibo = match.group("opol")
         if match.group("origen"):
@@ -789,14 +792,14 @@ def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
         rows.append(
             {
                 "poliza": match.group("poliza"),
-                "recibo": recibo,
+                "recibo": recibo or "",
                 "fechaRecibo": _month_end_from_period(match.group("periodo")),
-                "tomador": re.sub(r"\s+", " ", match.group("tomador")).strip(),
-                "primaNeta": match.group("prima"),
+                "tomador": re.sub(r"\s+", " ", tomador).strip(),
+                "primaNeta": first_money.group(0),
             }
         )
 
-    return _dedupe_rows_by(rows, ("poliza", "recibo", "fechaRecibo"))
+    return _dedupe_rows_by(rows, ("poliza", "recibo", "fechaRecibo", "tomador", "primaNeta"))
 
 
 def _month_end_from_period(raw: str) -> str:

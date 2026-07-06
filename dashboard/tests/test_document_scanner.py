@@ -148,16 +148,22 @@ class DocumentScannerTests(unittest.TestCase):
         NNUUMM..PPOOLLIIZZAA OO..PPOOL OORR FFEECCHHAA PP.. CCCC TTCC AAPPEELLLLIIDDOOSS YY NNOOMMBBRREE SS//RREECCAARR..FFRRAACC PPRRIIMMAA TTOOTTAALL LLIIQQUUIIDDOO BBRRUUTTAA SSIITT..
         0600070100037 50 05-2025 M 1 C LAISTER, JONATHAN MARK 40,43 43,52 39,48 4,04
         0600070100116 273 88 04-2025 A 2 P MAARTEN DE JONG, RICK 457,01 457,70 389,15 68,55
+        0020000019288 01-2026 T 1 C KRAFT, ERICH 467,88 489,65 442,86 46,79
+        0600000100002 2795 01-2026 M 1 C PRUDENTIAL AND BROKERS FINA 243,56 243,94 243,94
         """
         result = extract_with_template(text, {"recordMode": "dkv-table", "fields": {}})
-        self.assertEqual(result["totals"]["policies"], 2)
-        self.assertEqual(result["totals"]["netPremium"], 497.44)
+        self.assertEqual(result["totals"]["policies"], 4)
+        self.assertEqual(result["totals"]["netPremium"], 1208.88)
         self.assertEqual(result["rows"][0]["poliza"], "0600070100037")
         self.assertEqual(result["rows"][0]["recibo"], "50")
         self.assertEqual(result["rows"][0]["fechaRecibo"], "2025-05-31")
         self.assertEqual(result["rows"][0]["tomador"], "LAISTER, JONATHAN MARK")
         self.assertEqual(result["rows"][0]["primaNeta"], 40.43)
         self.assertEqual(result["rows"][1]["recibo"], "273-88")
+        self.assertEqual(result["rows"][2]["poliza"], "0020000019288")
+        self.assertEqual(result["rows"][2]["recibo"], "")
+        self.assertEqual(result["rows"][2]["fechaRecibo"], "2026-01-31")
+        self.assertEqual(result["rows"][3]["primaNeta"], 243.56)
 
     def test_dkv_drive_document_extracts_expected_rows(self) -> None:
         source, pdf_bytes = download_pdf(
@@ -173,6 +179,22 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["poliza"], "0600070100037")
         self.assertEqual(result["rows"][0]["tomador"], "LAISTER, JONATHAN MARK")
         self.assertEqual(result["rows"][0]["primaNeta"], 40.43)
+
+    def test_dkv_drive_document_extracts_rows_without_opol(self) -> None:
+        source, pdf_bytes = download_pdf(
+            "https://drive.google.com/file/d/1QgFkiOxvllOaBi_NPFd2dX05MO9zn-Zm/view?usp=sharing"
+        )
+        text, page_count = extract_pdf_text(pdf_bytes)
+        result = extract_with_template(text, {"recordMode": "dkv-table", "fields": {}})
+        self.assertEqual(source.document_id, "1QgFkiOxvllOaBi_NPFd2dX05MO9zn-Zm")
+        self.assertEqual(page_count, 6)
+        self.assertEqual(infer_insurer(text), "DKV")
+        self.assertEqual(result["totals"]["policies"], 187)
+        self.assertEqual(result["totals"]["netPremium"], 122331.61)
+        self.assertEqual(result["rows"][0]["poliza"], "0020000019288")
+        self.assertEqual(result["rows"][0]["recibo"], "")
+        self.assertEqual(result["rows"][0]["tomador"], "KRAFT, ERICH")
+        self.assertEqual(result["rows"][0]["primaNeta"], 467.88)
 
     def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
         payload = {
