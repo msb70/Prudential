@@ -799,7 +799,113 @@ def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
             }
         )
 
+    rows.extend(_extract_dkv_vertical_rows(text))
     return _dedupe_rows_by(rows, ("poliza", "recibo", "fechaRecibo", "tomador", "primaNeta"))
+
+
+def _extract_dkv_vertical_rows(text: str) -> list[dict[str, Any]]:
+    lines = [re.sub(r"\s+", " ", raw_line).strip() for raw_line in text.splitlines()]
+    rows: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        if not _is_dkv_column_header(lines[index]):
+            index += 1
+            continue
+
+        prefix_entries: list[dict[str, str]] = []
+        pending_policies: list[str] = []
+        cursor = index + 1
+        detail_header_index = -1
+        while cursor < len(lines):
+            line = lines[cursor]
+            if _is_dkv_detail_header(line):
+                detail_header_index = cursor
+                break
+            entry = _parse_dkv_vertical_prefix(line)
+            if entry:
+                prefix_entries.append(entry)
+            elif re.fullmatch(r"\d{13}", line or ""):
+                pending_policies.append(line)
+            elif pending_policies and (period_match := re.fullmatch(r"(\d{2}[/-]\d{4})(?:\s+[A-Z])?", line or "")):
+                prefix_entries.append(
+                    {
+                        "poliza": pending_policies.pop(0),
+                        "recibo": "",
+                        "periodo": period_match.group(1),
+                    }
+                )
+            cursor += 1
+
+        if detail_header_index == -1 or not prefix_entries:
+            index += 1
+            continue
+
+        detail_entries: list[dict[str, str]] = []
+        cursor = detail_header_index + 1
+        while cursor < len(lines):
+            line = lines[cursor]
+            if _is_dkv_column_header(line) or re.search(r"\bRECIBOS\s+PENDIENTES\b|\bCARGO\s+TOTAL\b", line, re.IGNORECASE):
+                break
+            detail = _parse_dkv_detail_line(line)
+            if detail:
+                detail_entries.append(detail)
+            cursor += 1
+
+        for prefix, detail in zip(prefix_entries, detail_entries):
+            rows.append(
+                {
+                    "poliza": prefix["poliza"],
+                    "recibo": prefix.get("recibo", ""),
+                    "fechaRecibo": _month_end_from_period(prefix.get("periodo", "")),
+                    "tomador": detail["tomador"],
+                    "primaNeta": detail["primaNeta"],
+                }
+            )
+        index = cursor
+    return rows
+
+
+def _is_dkv_column_header(line: str) -> bool:
+    normalized = normalize_for_match(line or "")
+    return "num poliza" in normalized and "fecha p" in normalized
+
+
+def _is_dkv_detail_header(line: str) -> bool:
+    normalized = normalize_for_match(line or "")
+    return "apellidos y nombre" in normalized and (
+        "prima neta" in normalized or "prima total" in normalized or "s recar frac" in normalized
+    )
+
+
+def _parse_dkv_vertical_prefix(line: str) -> dict[str, str] | None:
+    match = re.fullmatch(
+        r"(?P<poliza>\d{13})\s+"
+        r"(?:(?P<opol>\d{1,6})(?:\s+(?P<origen>\d{1,6}))?\s+)?"
+        r"(?P<periodo>\d{2}[/-]\d{4})",
+        line or "",
+    )
+    if not match:
+        return None
+    recibo = match.group("opol") or ""
+    if match.group("origen"):
+        recibo = f"{recibo}-{match.group('origen')}"
+    return {"poliza": match.group("poliza"), "recibo": recibo, "periodo": match.group("periodo")}
+
+
+def _parse_dkv_detail_line(line: str) -> dict[str, str] | None:
+    if not line or _looks_like_table_total(line):
+        return None
+    money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{1,2}|-?\d+,\d{1,2}"
+    body = _repair_dkv_money_ocr(line)
+    body_without_status = re.sub(r"\s+\d{2}$", "", body)
+    money_matches = list(re.finditer(money_pattern, body_without_status))
+    if len(money_matches) < 2:
+        return None
+    first_money = money_matches[-4] if len(money_matches) >= 4 else money_matches[0]
+    tomador = body_without_status[: first_money.start()].strip()
+    if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", tomador):
+        return None
+    return {"tomador": re.sub(r"\s+", " ", tomador).strip(), "primaNeta": first_money.group(0)}
 
 
 def _repair_dkv_money_ocr(value: str) -> str:
