@@ -765,7 +765,7 @@ def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
         rf"(?P<periodo>\d{{2}}[/-]\d{{4}})\s+"
         rf"(?P<periodicidad>[A-Z])\s+"
         rf"(?P<cc>\d+)\s+"
-        rf"(?P<tc>[A-Z])\s+"
+        rf"\(?(?P<tc>[A-Z])\s+"
         rf"(?P<body>.+)$",
         re.IGNORECASE,
     )
@@ -777,12 +777,12 @@ def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
         match = prefix_pattern.match(line)
         if not match:
             continue
-        body = match.group("body").strip()
+        body = _repair_dkv_money_ocr(match.group("body").strip())
         body_without_status = re.sub(r"\s+\d{2}$", "", body)
         money_matches = list(re.finditer(money_pattern, body_without_status))
-        if len(money_matches) < 3:
+        if len(money_matches) < 2:
             continue
-        first_money = money_matches[-4] if len(money_matches) >= 4 else money_matches[-3]
+        first_money = money_matches[-4] if len(money_matches) >= 4 else money_matches[0]
         tomador = body_without_status[: first_money.start()].strip()
         if not tomador:
             continue
@@ -800,6 +800,10 @@ def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
         )
 
     return _dedupe_rows_by(rows, ("poliza", "recibo", "fechaRecibo", "tomador", "primaNeta"))
+
+
+def _repair_dkv_money_ocr(value: str) -> str:
+    return re.sub(r"\b(\d{1,3}\.\d{3})(\d{2}),", r"\1,\2", value or "")
 
 
 def _month_end_from_period(raw: str) -> str:
