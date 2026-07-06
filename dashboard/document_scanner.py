@@ -43,7 +43,7 @@ PMP_SOURCE_CSV_URL = (
 )
 DEFAULT_GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1yMkfCsuZplCqzpnyCYcCkM_AP4J3fNmFCPlTR5FSlgs"
 DEFAULT_SERVICE_ACCOUNT_FILE = DATA_DIR / "credentials" / "prudential-scanner-service-account.json"
-BUILT_IN_TEMPLATE_INSURERS = ("Reale Seguros Generales, S.A.", "Allianz", "Zurich")
+BUILT_IN_TEMPLATE_INSURERS = ("Reale Seguros Generales, S.A.", "Allianz", "Zurich", "DKV")
 GOOGLE_SHEETS_SCOPES = (
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.file",
@@ -322,6 +322,10 @@ def infer_insurer(text: str, fallback: str = "") -> str:
         return "Allianz"
     if re.search(r"\bzurich\b", text, re.IGNORECASE):
         return "Zurich"
+    if re.search(r"\b(?:dkv|union\s+medica\s+la\s+fuencisla|u\.?\s*m\.?\s*l\.?\s*f\.?)\b", text, re.IGNORECASE):
+        return "DKV"
+    if "NNUUMM..PPOOLLIIZZAA" in text and "SS//RREECCAARR..FFRRAACC" in text:
+        return "DKV"
     for line in text.splitlines()[:20]:
         clean = re.sub(r"\s+", " ", line).strip()
         if len(clean) >= 4 and not re.search(r"\d{2}[/-]\d{2}[/-]\d{2,4}", clean):
@@ -346,6 +350,8 @@ def _record_mode_for_insurer(insurer: str, fallback: str = "line") -> str:
         return "allianz-table"
     if "zurich" in normalized:
         return "zurich-table"
+    if "dkv" in normalized:
+        return "dkv-table"
     return fallback
 
 
@@ -360,6 +366,8 @@ def extract_with_template(text: str, template: dict[str, Any]) -> dict[str, Any]
         rows = _extract_allianz_rows(text)
     if record_mode == "zurich-table":
         rows = _extract_zurich_rows(text)
+    if record_mode == "dkv-table":
+        rows = _extract_dkv_rows(text)
 
     if not rows:
         rows = _extract_line_rows(text, fields)
@@ -748,6 +756,62 @@ def _clean_zurich_holder(raw: str) -> str:
     return clean[:120]
 
 
+def _extract_dkv_rows(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    money_pattern = r"-?\d{1,3}(?:[.\s]\d{3})*,\d{1,2}|-?\d+,\d{1,2}"
+    line_pattern = re.compile(
+        rf"^(?P<poliza>\d{{13}})\s+"
+        rf"(?P<opol>\d{{1,6}})\s+"
+        rf"(?:(?P<origen>\d{{1,6}})\s+)?"
+        rf"(?P<periodo>\d{{2}}[/-]\d{{4}})\s+"
+        rf"(?P<periodicidad>[A-Z])\s+"
+        rf"(?P<cc>\d+)\s+"
+        rf"(?P<tc>[A-Z])\s+"
+        rf"(?P<tomador>.+?)\s+"
+        rf"(?P<prima>{money_pattern})\s+"
+        rf"(?P<prima_total>{money_pattern})\s+"
+        rf"(?P<liquido>{money_pattern})\s+"
+        rf"(?P<comision>{money_pattern})"
+        rf"(?:\s|$)",
+        re.IGNORECASE,
+    )
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or not re.match(r"^\d{13}\s+\d+", line):
+            continue
+        match = line_pattern.match(line)
+        if not match:
+            continue
+        recibo = match.group("opol")
+        if match.group("origen"):
+            recibo = f"{recibo}-{match.group('origen')}"
+        rows.append(
+            {
+                "poliza": match.group("poliza"),
+                "recibo": recibo,
+                "fechaRecibo": _month_end_from_period(match.group("periodo")),
+                "tomador": re.sub(r"\s+", " ", match.group("tomador")).strip(),
+                "primaNeta": match.group("prima"),
+            }
+        )
+
+    return _dedupe_rows_by(rows, ("poliza", "recibo", "fechaRecibo"))
+
+
+def _month_end_from_period(raw: str) -> str:
+    value = re.sub(r"\s+", "", raw or "")
+    for fmt, pattern in (("%m-%Y", r"^\d{2}-\d{4}$"), ("%m/%Y", r"^\d{2}/\d{4}$")):
+        if not re.fullmatch(pattern, value):
+            continue
+        try:
+            parsed = datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        return f"{parsed.year:04d}-{parsed.month:02d}-{monthrange(parsed.year, parsed.month)[1]:02d}"
+    return ""
+
+
 def _extract_cluster_rows(text: str, fields: dict[str, str]) -> list[dict[str, Any]]:
     policies = re.findall(fields.get("policy", DEFAULT_FIELD_PATTERNS["policy"]), text, re.IGNORECASE)
     holders = re.findall(fields.get("holder", DEFAULT_FIELD_PATTERNS["holder"]), text, re.IGNORECASE)
@@ -840,7 +904,7 @@ def commit_scan(payload: dict[str, Any]) -> dict[str, Any]:
     scanned_at = now_iso()
 
     normalized_insurer = insurer.lower()
-    use_row_date = "allianz" in normalized_insurer or "zurich" in normalized_insurer
+    use_row_date = any(name in normalized_insurer for name in ("allianz", "zurich", "dkv"))
     rows = _normalize_rows_before_pmp(payload.get("rows", []), use_row_date)
     rows = mark_pmp_rows(rows)
     sheet_rows = [

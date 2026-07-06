@@ -8,8 +8,10 @@ from dashboard.document_scanner import (
     DEFAULT_GOOGLE_SHEET_URL,
     PMP_SOURCE_CSV_URL,
     commit_scan,
+    download_pdf,
     extract_pdf_text,
     extract_with_template,
+    infer_insurer,
     mark_pmp_rows,
     normalize_money,
     parse_google_drive_source,
@@ -141,6 +143,37 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["fechaRecibo"], "2026-11-09")
         self.assertEqual(result["rows"][0]["primaNeta"], 239.59)
 
+    def test_dkv_table_extracts_policy_holder_premium_and_period_date(self) -> None:
+        text = """
+        NNUUMM..PPOOLLIIZZAA OO..PPOOL OORR FFEECCHHAA PP.. CCCC TTCC AAPPEELLLLIIDDOOSS YY NNOOMMBBRREE SS//RREECCAARR..FFRRAACC PPRRIIMMAA TTOOTTAALL LLIIQQUUIIDDOO BBRRUUTTAA SSIITT..
+        0600070100037 50 05-2025 M 1 C LAISTER, JONATHAN MARK 40,43 43,52 39,48 4,04
+        0600070100116 273 88 04-2025 A 2 P MAARTEN DE JONG, RICK 457,01 457,70 389,15 68,55
+        """
+        result = extract_with_template(text, {"recordMode": "dkv-table", "fields": {}})
+        self.assertEqual(result["totals"]["policies"], 2)
+        self.assertEqual(result["totals"]["netPremium"], 497.44)
+        self.assertEqual(result["rows"][0]["poliza"], "0600070100037")
+        self.assertEqual(result["rows"][0]["recibo"], "50")
+        self.assertEqual(result["rows"][0]["fechaRecibo"], "2025-05-31")
+        self.assertEqual(result["rows"][0]["tomador"], "LAISTER, JONATHAN MARK")
+        self.assertEqual(result["rows"][0]["primaNeta"], 40.43)
+        self.assertEqual(result["rows"][1]["recibo"], "273-88")
+
+    def test_dkv_drive_document_extracts_expected_rows(self) -> None:
+        source, pdf_bytes = download_pdf(
+            "https://drive.google.com/file/d/1nDrfuVMfxsFEIiHOqonKoP1Wvc40SAiK/view?usp=sharing"
+        )
+        text, page_count = extract_pdf_text(pdf_bytes)
+        result = extract_with_template(text, {"recordMode": "dkv-table", "fields": {}})
+        self.assertEqual(source.document_id, "1nDrfuVMfxsFEIiHOqonKoP1Wvc40SAiK")
+        self.assertEqual(page_count, 4)
+        self.assertEqual(infer_insurer(text), "DKV")
+        self.assertEqual(result["totals"]["policies"], 6)
+        self.assertEqual(result["totals"]["netPremium"], 4722.14)
+        self.assertEqual(result["rows"][0]["poliza"], "0600070100037")
+        self.assertEqual(result["rows"][0]["tomador"], "LAISTER, JONATHAN MARK")
+        self.assertEqual(result["rows"][0]["primaNeta"], 40.43)
+
     def test_commit_scan_uses_allianz_row_due_date_without_changing_global_date(self) -> None:
         payload = {
             "insurer": "Allianz",
@@ -192,6 +225,32 @@ class DocumentScannerTests(unittest.TestCase):
         self.assertEqual(result["sheetRows"][0]["Fecha"], "2026-06-09")
         self.assertEqual(result["sheetRows"][0]["Aseguradora"], "Zurich")
         self.assertEqual(result["sheetRows"][0]["Recibo"], "8871189711")
+
+    def test_commit_scan_uses_dkv_row_period_date(self) -> None:
+        payload = {
+            "insurer": "DKV",
+            "documentId": "DOC-DKV",
+            "liquidationDate": "2025-05-27",
+            "rows": [
+                {
+                    "poliza": "0600070100037",
+                    "recibo": "50",
+                    "fechaRecibo": "2025-05-31",
+                    "tomador": "LAISTER, JONATHAN MARK",
+                    "primaNeta": "40,43",
+                }
+            ],
+        }
+        with (
+            patch("dashboard.document_scanner.ensure_state", return_value={"templates": {}, "scans": {}, "sheetRows": [], "historyRows": [], "googleSheetUrl": DEFAULT_GOOGLE_SHEET_URL}),
+            patch("dashboard.document_scanner.save_state"),
+            patch("dashboard.document_scanner.sync_google_sheet", return_value={"mode": "test"}),
+            patch("dashboard.document_scanner.mark_pmp_rows", side_effect=lambda rows: rows),
+        ):
+            result = commit_scan(payload)
+        self.assertEqual(result["sheetRows"][0]["Fecha"], "2025-05-31")
+        self.assertEqual(result["sheetRows"][0]["Aseguradora"], "DKV")
+        self.assertEqual(result["sheetRows"][0]["Poliza"], "0600070100037")
 
     def test_commit_scan_validates_allianz_pmp_after_policy_normalization(self) -> None:
         payload = {
